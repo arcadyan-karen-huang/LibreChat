@@ -1,6 +1,6 @@
 import { useMemo, useCallback } from 'react';
 import { EModelEndpoint, Constants } from 'librechat-data-provider';
-import { useChatContext, useAgentsMapContext, useAssistantsMapContext } from '~/Providers';
+import { useChatContext, useChatFormContext, useAgentsMapContext, useAssistantsMapContext } from '~/Providers';
 import { useGetAssistantDocsQuery, useGetEndpointsQuery } from '~/data-provider';
 import { getIconEndpoint, getEntity } from '~/utils';
 import { useSubmitMessage } from '~/hooks';
@@ -47,10 +47,10 @@ const ConversationStarters = () => {
     return documentsMap.get(entity?.id ?? '')?.conversation_starters ?? [];
   }, [documentsMap, isAgent, entity]);
 
-  const { submitMessage } = useSubmitMessage();
+  const methods = useChatFormContext();
   const sendConversationStarter = useCallback(
-    (text: string) => submitMessage({ text }),
-    [submitMessage],
+    (text: string) => methods.setValue('text', text),
+    [methods],
   );
 
   if (!conversation_starters.length) {
@@ -65,11 +65,13 @@ const ConversationStarters = () => {
           <button
             key={index}
             onClick={() => sendConversationStarter(text)}
-            className="relative flex w-40 cursor-pointer flex-col gap-2 rounded-2xl border border-border-medium px-3 pb-4 pt-3 text-start align-top text-[15px] shadow-[0_0_2px_0_rgba(0,0,0,0.05),0_4px_6px_0_rgba(0,0,0,0.02)] transition-colors duration-300 ease-in-out fade-in hover:bg-surface-tertiary"
+            className="group relative flex items-center text-start transition disabled:cursor-not-allowed xl:text-[14px] sm:border-token-border-default sm:enabled:hover:bg-surface-tertiary h-[50px] w-full gap-[15px] px-[15px] sm:h-[40px] sm:w-auto sm:max-w-none sm:gap-2 sm:rounded-[100px] sm:border sm:py-[10px] sm:ps-[14px] sm:pe-[16px]"
           >
-            <p className="break-word line-clamp-3 overflow-hidden text-balance break-all text-text-secondary">
-              {text}
-            </p>
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="text-token-text-primary min-w-0 overflow-hidden font-normal text-ellipsis whitespace-nowrap transition select-none sm:group-hover:text-token-text-primary sm:text-token-text-secondary">
+                {text}
+              </span>
+            </span>
           </button>
         ))}
     </div>

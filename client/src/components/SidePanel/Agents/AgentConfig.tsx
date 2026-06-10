@@ -23,6 +23,7 @@ import useAgentCapabilities from '~/hooks/Agents/useAgentCapabilities';
 import { useFileMapContext, useAgentPanelContext } from '~/Providers';
 import AgentCategorySelector from './AgentCategorySelector';
 import Action from '~/components/SidePanel/Builder/Action';
+import AssistantConversationStarters from '~/components/SidePanel/Builder/AssistantConversationStarters';
 import { useLocalize, useVisibleTools, useHasAccess } from '~/hooks';
 import { Panel, isEphemeralAgent } from '~/common';
 import { useListSkillsQuery, useGetAgentFiles } from '~/data-provider';
@@ -295,6 +296,24 @@ export default function AgentConfig() {
         </div>
         {/* Instructions */}
         <Instructions />
+        {/* Conversation Starters */}
+        <div className="mb-4">
+          <Controller
+            name="conversation_starters"
+            control={control}
+            defaultValue={[]}
+            render={({ field }) => (
+              <AssistantConversationStarters
+                field={{
+                  value: field.value ?? [],
+                  onChange: field.onChange,
+                }}
+                inputClass={inputClass}
+                labelClass={labelClass}
+              />
+            )}
+          />
+        </div>
         {/* Model and Provider */}
         <div className="mb-4">
           <label className={labelClass} htmlFor="provider">

@@ -290,6 +290,7 @@ export const defaultAgentFormValues = {
   name: '',
   description: '',
   instructions: '',
+  conversation_starters: [],
   model: '',
   model_parameters: {},
   tools: [],

@@ -98,6 +98,15 @@ function AgentSelect({
         }
 
         if (
+          name === 'conversation_starters' &&
+          Array.isArray(value) &&
+          value.every((item) => typeof item === 'string')
+        ) {
+          formValues[name] = value;
+          return;
+        }
+
+        if (
           name === 'agent_ids' &&
           Array.isArray(value) &&
           value.every((item) => typeof item === 'string')
