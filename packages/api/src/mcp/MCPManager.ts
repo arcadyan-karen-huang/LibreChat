@@ -39,6 +39,40 @@ function createOboToolCallErrorMessage(
   return `${logPrefix} ${error.userMessage} Cannot execute tool ${toolName}. ${failureSuffix}`;
 }
 
+function summarizeToolArguments(toolArguments?: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (toolArguments == null) {
+    return toolArguments;
+  }
+
+  const summary = { ...toolArguments };
+  const librechatFiles = toolArguments.librechat_files;
+  if (!Array.isArray(librechatFiles)) {
+    return summary;
+  }
+
+  summary.librechat_files = librechatFiles.map((file, index) => {
+    if (file == null || typeof file !== 'object' || Array.isArray(file)) {
+      return { index, invalid: true };
+    }
+
+    const typedFile = file as Record<string, unknown>;
+    const contentBase64 = typedFile.content_base64;
+
+    return {
+      file_id: typedFile.file_id,
+      filename: typedFile.filename,
+      mime_type: typedFile.mime_type,
+      size: typedFile.size,
+      content_base64_length: typeof contentBase64 === 'string' ? contentBase64.length : null,
+      content_base64_preview:
+        typeof contentBase64 === 'string' ? contentBase64.slice(0, 32) : '[invalid]',
+    };
+  });
+  summary.librechat_files_count = librechatFiles.length;
+
+  return summary;
+}
+
 /**
  * Centralized manager for MCP server connections and tool execution.
  * Extends UserConnectionManager to handle both app-level and user-specific connections.
@@ -434,6 +468,11 @@ Please follow these instructions when using tools from the respective MCP server
         }
         resolvedHeaders['Authorization'] = `Bearer ${oboTokens.access_token}`;
       }
+      logger.warn(
+        `[MCP][${serverName}][${toolName}] Tool call parameters: ${JSON.stringify(
+          summarizeToolArguments(toolArguments),
+        )}`,
+      );
 
       connection.setRequestHeaders(resolvedHeaders);
 
@@ -452,6 +491,7 @@ Please follow these instructions when using tools from the respective MCP server
           ...options,
         },
       );
+      logger.warn(`[MCP][${serverName}][${toolName}] Tool call result: ${JSON.stringify(result)}`);
       if (userId) {
         this.updateUserLastActivity(userId);
       }

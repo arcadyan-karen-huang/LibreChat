@@ -74,6 +74,12 @@ jest.mock('~/models', () => ({
   updateToken: jest.fn(),
   deleteTokens: jest.fn(),
   getRoleByName: jest.fn(),
+  getFiles: jest.fn(),
+  getConvoFiles: jest.fn(),
+}));
+
+jest.mock('~/server/services/Files/strategies', () => ({
+  getStrategyFunctions: jest.fn(),
 }));
 
 jest.mock('./Tools/mcp', () => ({
@@ -936,6 +942,243 @@ describe('User parameter passing tests', () => {
 
       expect(getRoleByName).toHaveBeenCalledTimes(1);
       expect(mockCallTool).toHaveBeenCalledTimes(2);
+    });
+
+    it('should proxy file_id arguments into librechat_files payload', async () => {
+      const mockUser = { id: 'file-proxy-user', role: 'USER' };
+      const mockReq = { user: mockUser };
+      const mockRes = { write: jest.fn(), flush: jest.fn() };
+      const { getRoleByName, getFiles } = require('~/models');
+      const { getStrategyFunctions } = require('~/server/services/Files/strategies');
+
+      getRoleByName.mockResolvedValue({
+        permissions: {
+          [PermissionTypes.MCP_SERVERS]: {
+            [Permissions.USE]: true,
+          },
+        },
+      });
+
+      getFiles.mockResolvedValue([
+        {
+          file_id: 'file-123',
+          filename: 'report.xlsx',
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          source: 'local',
+          filepath: '/uploads/report.xlsx',
+          bytes: 16,
+        },
+      ]);
+
+      getStrategyFunctions.mockReturnValue({
+        getDownloadStream: jest.fn(async () => Buffer.from('mock-xlsx-content')),
+      });
+
+      const mockCallTool = jest.fn().mockResolvedValue(['ok', null]);
+      mockGetMCPManager.mockReturnValue({
+        callTool: mockCallTool,
+      });
+
+      const mcpPermissionContext = createMCPPermissionContext(mockReq);
+      const mcpTool = await createMCPTool({
+        mcpPermissionContext,
+        res: mockRes,
+        user: mockUser,
+        toolKey: `fetch${D}test-server`,
+        provider: 'openai',
+        userMCPAuthMap: {},
+        availableTools: {
+          [`fetch${D}test-server`]: {
+            function: {
+              description: 'Fetch tool',
+              parameters: { type: 'object', properties: {} },
+            },
+          },
+        },
+      });
+
+      await expect(
+        mcpTool.invoke(
+          { file_id: 'file-123' },
+          {
+            configurable: {
+              user: mockUser,
+            },
+            metadata: {
+              provider: 'openai',
+              thread_id: 'thread-2',
+              run_id: 'run-2',
+            },
+            toolCall: {},
+          },
+        ),
+      ).resolves.toBe('ok');
+
+      expect(mockCallTool).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolArguments: expect.objectContaining({
+            file_id: 'file-123',
+            librechat_files: [
+              expect.objectContaining({
+                file_id: 'file-123',
+                filename: 'report.xlsx',
+                size: 17,
+              }),
+            ],
+          }),
+        }),
+      );
+    });
+
+    it('should fallback to latest conversation file when file_id is omitted', async () => {
+      const mockUser = { id: 'file-fallback-user', role: 'USER' };
+      const mockReq = { user: mockUser };
+      const mockRes = { write: jest.fn(), flush: jest.fn() };
+      const { getRoleByName, getFiles, getConvoFiles } = require('~/models');
+      const { getStrategyFunctions } = require('~/server/services/Files/strategies');
+
+      getRoleByName.mockResolvedValue({
+        permissions: {
+          [PermissionTypes.MCP_SERVERS]: {
+            [Permissions.USE]: true,
+          },
+        },
+      });
+
+      getConvoFiles.mockResolvedValue(['file-456']);
+      getFiles.mockResolvedValue([
+        {
+          file_id: 'file-456',
+          filename: 'source.xlsx',
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          source: 'local',
+          filepath: '/uploads/source.xlsx',
+          bytes: 20,
+        },
+      ]);
+
+      getStrategyFunctions.mockReturnValue({
+        getDownloadStream: jest.fn(async () => Buffer.from('fallback-xlsx-content')),
+      });
+
+      const mockCallTool = jest.fn().mockResolvedValue(['ok', null]);
+      mockGetMCPManager.mockReturnValue({
+        callTool: mockCallTool,
+      });
+
+      const mcpPermissionContext = createMCPPermissionContext(mockReq);
+      const mcpTool = await createMCPTool({
+        mcpPermissionContext,
+        res: mockRes,
+        user: mockUser,
+        toolKey: `fetch${D}test-server`,
+        provider: 'openai',
+        userMCPAuthMap: {},
+        availableTools: {
+          [`fetch${D}test-server`]: {
+            function: {
+              description: 'Fetch tool',
+              parameters: { type: 'object', properties: {} },
+            },
+          },
+        },
+      });
+
+      await expect(
+        mcpTool.invoke(
+          {},
+          {
+            configurable: {
+              user: mockUser,
+              requestBody: { conversationId: 'convo-123' },
+            },
+            metadata: {
+              provider: 'openai',
+              thread_id: 'thread-3',
+              run_id: 'run-3',
+            },
+            toolCall: {},
+          },
+        ),
+      ).resolves.toBe('ok');
+
+      expect(mockCallTool).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolArguments: expect.objectContaining({
+            librechat_files: [
+              expect.objectContaining({
+                file_id: 'file-456',
+                filename: 'source.xlsx',
+              }),
+            ],
+          }),
+        }),
+      );
+    });
+
+    it('should inject conversation_id from requestBody when missing', async () => {
+      const mockUser = { id: 'conversation-id-user', role: 'USER' };
+      const mockReq = { user: mockUser };
+      const mockRes = { write: jest.fn(), flush: jest.fn() };
+      const { getRoleByName } = require('~/models');
+
+      getRoleByName.mockResolvedValue({
+        permissions: {
+          [PermissionTypes.MCP_SERVERS]: {
+            [Permissions.USE]: true,
+          },
+        },
+      });
+
+      const mockCallTool = jest.fn().mockResolvedValue(['ok', null]);
+      mockGetMCPManager.mockReturnValue({
+        callTool: mockCallTool,
+      });
+
+      const mcpPermissionContext = createMCPPermissionContext(mockReq);
+      const mcpTool = await createMCPTool({
+        mcpPermissionContext,
+        res: mockRes,
+        user: mockUser,
+        toolKey: `fetch${D}test-server`,
+        provider: 'openai',
+        userMCPAuthMap: {},
+        availableTools: {
+          [`fetch${D}test-server`]: {
+            function: {
+              description: 'Fetch tool',
+              parameters: { type: 'object', properties: {} },
+            },
+          },
+        },
+      });
+
+      await expect(
+        mcpTool.invoke(
+          { mr_ver: 'MR196' },
+          {
+            configurable: {
+              user: mockUser,
+              requestBody: { conversationId: 'convo-555' },
+            },
+            metadata: {
+              provider: 'openai',
+              thread_id: 'thread-4',
+              run_id: 'run-4',
+            },
+            toolCall: {},
+          },
+        ),
+      ).resolves.toBe('ok');
+
+      expect(mockCallTool).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolArguments: expect.objectContaining({
+            conversation_id: 'convo-555',
+            mr_ver: 'MR196',
+          }),
+        }),
+      );
     });
   });
 

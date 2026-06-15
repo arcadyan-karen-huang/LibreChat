@@ -21,10 +21,13 @@ const {
   Time,
   CacheKeys,
   Constants,
+  FileSources,
   Permissions,
   PermissionTypes,
+  checkOpenAIStorage,
   isAssistantsEndpoint,
 } = require('librechat-data-provider');
+const { Readable } = require('stream');
 const {
   getOAuthReconnectionManager,
   getMCPServersRegistry,
@@ -37,6 +40,7 @@ const { getGraphApiToken } = require('./GraphTokenService');
 const { exchangeOboToken } = require('./OboTokenService');
 const { createOboTrustChecker } = require('./OboPolicyService');
 const { reinitMCPServer } = require('./Tools/mcp');
+const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const { getAppConfig } = require('./Config');
 const { getLogStores } = require('~/cache');
 
@@ -46,6 +50,215 @@ const RECONNECT_THROTTLE_MS = 10_000;
 
 const missingToolCache = new Map();
 const MISSING_TOOL_TTL_MS = 10_000;
+const MAX_MCP_PROXY_FILE_COUNT = 5;
+const MAX_MCP_PROXY_FILE_BYTES = 15 * 1024 * 1024;
+
+function collectProxyFileIds(toolArguments) {
+  if (!toolArguments || typeof toolArguments !== 'object' || Array.isArray(toolArguments)) {
+    return [];
+  }
+
+  const singleFileId =
+    typeof toolArguments.file_id === 'string' && toolArguments.file_id.length > 0
+      ? [toolArguments.file_id]
+      : [];
+  const multipleFileIds = Array.isArray(toolArguments.file_ids)
+    ? toolArguments.file_ids.filter((id) => typeof id === 'string' && id.length > 0)
+    : [];
+  const librechatFileIds = Array.isArray(toolArguments.librechat_files)
+    ? toolArguments.librechat_files.map((f) => typeof f.file_id === 'string' && f.file_id.length > 0 ? f.file_id : null).filter((id) => id !== null)
+    : [];
+
+  return Array.from(new Set([...singleFileId, ...multipleFileIds, ...librechatFileIds]));
+}
+
+function withConversationId(toolArguments, requestBody) {
+  if (!toolArguments || typeof toolArguments !== 'object' || Array.isArray(toolArguments)) {
+    return toolArguments;
+  }
+
+  const conversationId =
+    typeof requestBody?.conversationId === 'string' && requestBody.conversationId.length > 0
+      ? requestBody.conversationId
+      : null;
+  if (!conversationId) {
+    return toolArguments;
+  }
+
+  const output = { ...toolArguments };
+  // if (typeof output.conversation_id !== 'string' || output.conversation_id.length === 0) {
+    output.conversation_id = conversationId;
+  // }
+
+  if (output.payload && typeof output.payload === 'object' && !Array.isArray(output.payload)) {
+    const payload = { ...output.payload };
+    // if (typeof payload.conversation_id !== 'string' || payload.conversation_id.length === 0) {
+      payload.conversation_id = conversationId;
+    // }
+    output.payload = payload;
+  }
+
+  return output;
+}
+
+async function resolveConversationFallbackFileIds({ requestBody, user }) {
+  const conversationId =
+    typeof requestBody?.conversationId === 'string' ? requestBody.conversationId : null;
+  if (!conversationId || !user?.id) {
+    return [];
+  }
+
+  const convoFileIds = (await db.getConvoFiles(conversationId)) ?? [];
+  if (convoFileIds.length === 0) {
+    return [];
+  }
+
+  const recentFiles =
+    (await db.getFiles(
+      { file_id: { $in: convoFileIds }, user: user.id },
+      { updatedAt: -1, createdAt: -1 },
+      { file_id: 1, filename: 1, type: 1 },
+    )) ?? [];
+
+  if (recentFiles.length === 0) {
+    return [];
+  }
+
+  const spreadsheetRegex = /\.(xlsx|xls|csv)$/i;
+  const spreadsheetMimeRegex =
+    /(spreadsheet|ms-excel|application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet|text\/csv)/i;
+
+  const prioritized = [];
+  const nonSpreadsheet = [];
+  for (const file of recentFiles) {
+    const fileName = file.filename ?? '';
+    const mime = file.type ?? '';
+    const isSpreadsheet = spreadsheetRegex.test(fileName) || spreadsheetMimeRegex.test(mime);
+    if (isSpreadsheet) {
+      prioritized.push(file.file_id);
+    } else {
+      nonSpreadsheet.push(file.file_id);
+    }
+  }
+
+  return [...prioritized, ...nonSpreadsheet].slice(0, MAX_MCP_PROXY_FILE_COUNT);
+}
+
+async function streamToBuffer(streamLike) {
+  if (Buffer.isBuffer(streamLike)) {
+    return streamLike;
+  }
+
+  if (!streamLike) {
+    throw new Error('Missing file stream data');
+  }
+
+  if (typeof streamLike.arrayBuffer === 'function') {
+    const arrayBuffer = await streamLike.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  }
+
+  const source =
+    streamLike.body && typeof streamLike.body.getReader === 'function'
+      ? Readable.fromWeb(streamLike.body)
+      : streamLike.body ?? streamLike;
+
+  const chunks = [];
+  for await (const chunk of source) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
+async function getProxyFileBuffer({ file, user }) {
+  if (checkOpenAIStorage(file.source) || file.source === FileSources.execute_code) {
+    throw new Error(
+      `file_id ${file.file_id} uses unsupported source \"${file.source}\" for MCP proxy transfer`,
+    );
+  }
+
+  const { getDownloadStream } = getStrategyFunctions(file.source);
+  if (!getDownloadStream) {
+    throw new Error(`No download strategy found for source \"${file.source}\"`);
+  }
+
+  const stream = await getDownloadStream({ user }, file.storageKey || file.filepath);
+  return streamToBuffer(stream);
+}
+
+async function hydrateToolArgumentsWithProxyFiles({ toolArguments, user, requestBody }) {
+  const baseToolArguments = withConversationId(toolArguments, requestBody);
+  logger.warn(`[MCP] Hydrating tool arguments with proxy files. Base arguments: ${JSON.stringify(baseToolArguments)}`);
+
+  let fileIds = collectProxyFileIds(baseToolArguments);
+  if (fileIds.length === 0) {
+    fileIds = await resolveConversationFallbackFileIds({ requestBody, user });
+  }
+  if (fileIds.length === 0) {
+    return baseToolArguments;
+  }
+
+  if (!user?.id) {
+    throw new Error('MCP file proxy requires an authenticated user');
+  }
+
+  logger.warn(`[MCP] Hydrating tool arguments with proxy files. File IDs: ${JSON.stringify(fileIds)}`);
+
+  if (fileIds.length > MAX_MCP_PROXY_FILE_COUNT) {
+    throw new Error(`MCP file proxy supports at most ${MAX_MCP_PROXY_FILE_COUNT} files per tool call`);
+  }
+
+  const dbFiles =
+    (await db.getFiles(
+      { file_id: { $in: fileIds }, user: user.id },
+      null,
+      {
+        file_id: 1,
+        filename: 1,
+        filepath: 1,
+        storageKey: 1,
+        type: 1,
+        bytes: 1,
+        source: 1,
+      },
+    )) ?? [];
+
+  const filesById = new Map(dbFiles.map((file) => [file.file_id, file]));
+  const unauthorizedIds = fileIds.filter((fileId) => !filesById.has(fileId));
+  if (unauthorizedIds.length > 0) {
+    throw new Error(`Unauthorized or missing file_id: ${unauthorizedIds.join(', ')}`);
+  }
+
+  const proxiedFiles = [];
+  for (const fileId of fileIds) {
+    const file = filesById.get(fileId);
+    if (!file) {
+      continue;
+    }
+
+    if (typeof file.bytes === 'number' && file.bytes > MAX_MCP_PROXY_FILE_BYTES) {
+      throw new Error(`file_id ${file.file_id} exceeds proxy size limit (${MAX_MCP_PROXY_FILE_BYTES} bytes)`);
+    }
+
+    const fileBuffer = await getProxyFileBuffer({ file, user });
+    if (fileBuffer.length > MAX_MCP_PROXY_FILE_BYTES) {
+      throw new Error(`file_id ${file.file_id} exceeds proxy size limit (${MAX_MCP_PROXY_FILE_BYTES} bytes)`);
+    }
+
+    proxiedFiles.push({
+      file_id: file.file_id,
+      filename: file.filename,
+      mime_type: file.type || 'application/octet-stream',
+      size: fileBuffer.length,
+      content_base64: fileBuffer.toString('base64'),
+    });
+  }
+
+  return {
+    ...baseToolArguments,
+    librechat_files: proxiedFiles,
+  };
+}
 
 async function userCanUseMCPServers(user, req) {
   if (!user?.id || !user?.role) {
@@ -718,12 +931,19 @@ function createToolInstance({
       const customUserVars =
         config?.configurable?.userMCPAuthMap?.[`${Constants.mcp_prefix}${serverName}`];
 
+      const resolvedToolArguments = await hydrateToolArgumentsWithProxyFiles({
+        toolArguments,
+        user: permissionUser,
+        requestBody: config?.configurable?.requestBody,
+      });
+      logger.debug(`[MCP][${serverName}][${toolName}][User: ${userId}] Resolved tool arguments:`, resolvedToolArguments);
+
       const result = await mcpManager.callTool({
         serverName,
         serverConfig: capturedServerConfig,
         toolName,
         provider,
-        toolArguments,
+        toolArguments: resolvedToolArguments,
         options: {
           signal: derivedSignal,
         },

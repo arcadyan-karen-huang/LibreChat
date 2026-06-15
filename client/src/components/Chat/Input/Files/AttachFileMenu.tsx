@@ -3,6 +3,7 @@ import { useRecoilState } from 'recoil';
 import * as Ariakit from '@ariakit/react';
 import {
   FileSearch,
+  FileUpIcon,
   ImageUpIcon,
   FileType2Icon,
   FileImageIcon,
@@ -193,6 +194,15 @@ const AttachFileMenu = ({
           icon: <ImageUpIcon className="icon-md" />,
         });
       }
+
+      items.push({
+        label: localize('com_ui_upload_original_file'),
+        onClick: () => {
+          setToolResource(undefined);
+          onAction();
+        },
+        icon: <FileUpIcon className="icon-md" />,
+      });
 
       if (capabilities.contextEnabled) {
         items.push({

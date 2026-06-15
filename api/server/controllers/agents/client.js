@@ -429,6 +429,15 @@ class AgentClient extends BaseClient {
       }
     }
 
+    /** Inject uploaded file metadata so LLM can pass filepath to MCP tools */
+    const reqFiles = this.options.req?.body?.files;
+    if (reqFiles?.length > 0) {
+      const fileLines = reqFiles
+        .map((f) => `- file_id: ${f.file_id}, filepath: ${f.filepath ?? ''}, type: ${f.type ?? ''}`)
+        .join('\n');
+      sharedRunContextParts.push(`## The attachments uploaded this time\n${fileLines}`);
+    }
+
     /** Memory context (user preferences/memories) */
     const withoutKeys = await this.useMemory();
     const memoryContext = withoutKeys

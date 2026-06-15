@@ -101,6 +101,7 @@ function setupMocks(overrides: { provider?: string } = {}) {
     com_ui_upload_file_search: 'Upload for File Search',
     com_ui_upload_image_input: 'Upload Image',
     com_ui_upload_ocr_text: 'Upload as Text',
+    com_ui_upload_original_file: 'Upload Original File',
     com_ui_upload_provider: 'Upload to Provider',
   };
   mockUseLocalize.mockReturnValue((key: string) => translations[key] || key);

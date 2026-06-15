@@ -17,7 +17,7 @@ jest.mock('~/config/paths', () => {
 
 const fs = require('fs');
 const path = require('path');
-const { saveLocalBuffer } = require('../crud');
+const { saveLocalBuffer, getLocalFileStream } = require('../crud');
 
 describe('saveLocalBuffer path containment', () => {
   beforeAll(() => {
@@ -65,5 +65,22 @@ describe('saveLocalBuffer path containment', () => {
     const filePath = path.join(mockTmpBase, 'uploads', 'user1', 'file-id__output.csv');
     expect(fs.existsSync(filePath)).toBe(true);
     fs.unlinkSync(filePath);
+  });
+
+  test('reads upload stream without req.config by falling back to shared paths config', async () => {
+    const saved = await saveLocalBuffer({
+      userId: 'user1',
+      buffer: Buffer.from('safe content'),
+      fileName: 'file-id__source.xlsx',
+      basePath: 'uploads',
+    });
+
+    const stream = await getLocalFileStream({ user: { id: 'user1' } }, saved);
+    const chunks = [];
+    for await (const chunk of stream) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+
+    expect(Buffer.concat(chunks).toString()).toBe('safe content');
   });
 });

@@ -311,7 +311,7 @@ async function uploadLocalFile({ req, file, file_id }) {
  */
 async function getLocalFileStream(req, filepath) {
   try {
-    const appConfig = req.config;
+    const appPaths = req?.config?.paths ?? paths;
     if (filepath.includes('/uploads/')) {
       const basePath = filepath.split('/uploads/')[1];
 
@@ -320,8 +320,8 @@ async function getLocalFileStream(req, filepath) {
         throw new Error(`Invalid file path: ${filepath}`);
       }
 
-      const fullPath = path.join(appConfig.paths.uploads, basePath);
-      const uploadsDir = appConfig.paths.uploads;
+      const fullPath = path.join(appPaths.uploads, basePath);
+      const uploadsDir = appPaths.uploads;
 
       const rel = path.relative(uploadsDir, fullPath);
       if (rel.startsWith('..') || path.isAbsolute(rel) || rel.includes(`..${path.sep}`)) {
@@ -338,8 +338,8 @@ async function getLocalFileStream(req, filepath) {
         throw new Error(`Invalid file path: ${filepath}`);
       }
 
-      const fullPath = path.join(appConfig.paths.imageOutput, basePath);
-      const publicDir = appConfig.paths.imageOutput;
+      const fullPath = path.join(appPaths.imageOutput, basePath);
+      const publicDir = appPaths.imageOutput;
 
       const rel = path.relative(publicDir, fullPath);
       if (rel.startsWith('..') || path.isAbsolute(rel) || rel.includes(`..${path.sep}`)) {
