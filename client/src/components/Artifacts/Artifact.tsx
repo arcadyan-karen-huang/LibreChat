@@ -5,10 +5,14 @@ import { useSetRecoilState } from 'recoil';
 import { useLocation } from 'react-router-dom';
 import type { Pluggable } from 'unified';
 import type { Artifact } from '~/common';
-import { useMessageContext, useArtifactContext } from '~/Providers';
+import { useMessageContext, useArtifactContext, useCodeState } from '~/Providers';
 import { logger, extractContent, isArtifactRoute } from '~/utils';
 import { artifactsState } from '~/store/artifacts';
 import ArtifactButton from './ArtifactButton';
+import { ArtifactPreview } from './ArtifactPreview';
+import useArtifactProps from '~/hooks/Artifacts/useArtifactProps';
+import type { SandpackPreviewRef } from '@codesandbox/sandpack-react';
+import { useGetStartupConfig } from '~/data-provider';
 
 export const artifactPlugin: Pluggable = () => {
   return (tree) => {
@@ -54,6 +58,12 @@ export function Artifact({
   const setArtifacts = useSetRecoilState(artifactsState);
   const [artifact, setArtifact] = useState<Artifact | null>(null);
 
+  const { files, fileKey, template, sharedProps } = useArtifactProps({ artifact : artifact ?? { id: '', identifier: '', title: '', type: '', content: '', lastUpdateTime: 0 } });
+  const previewRef = useRef<SandpackPreviewRef>(null);
+  const { data: startupConfig } = useGetStartupConfig();
+
+  const isInline = props.inline === 'true';
+
   const throttledUpdateRef = useRef(
     throttle((updateFn: () => void) => {
       updateFn();
@@ -93,17 +103,10 @@ export function Artifact({
       }
 
       setArtifacts((prevArtifacts) => {
-        if (
-          prevArtifacts?.[artifactKey] != null &&
-          prevArtifacts[artifactKey]?.content === content
-        ) {
+        if (prevArtifacts?.[artifactKey] != null && prevArtifacts[artifactKey]?.content === content) {
           return prevArtifacts;
         }
-
-        return {
-          ...prevArtifacts,
-          [artifactKey]: currentArtifact,
-        };
+        return { ...prevArtifacts, [artifactKey]: currentArtifact };
       });
 
       setArtifact(currentArtifact);
@@ -123,6 +126,21 @@ export function Artifact({
     resetCounter();
     updateArtifact();
   }, [updateArtifact, resetCounter]);
+
+  if (isInline && artifact) {
+    return (
+      <div className="max-w-full cursor-pointer items-center gap-1 rounded-3xl border bg-secondary/50 px-1.5 py-0.5 text-xs text-text-secondary">
+        <ArtifactPreview
+          files={files}
+          fileKey={fileKey}
+          template={template}
+          previewRef={previewRef as React.MutableRefObject<SandpackPreviewRef>}
+          sharedProps={sharedProps}
+          startupConfig={startupConfig}
+        />
+      </div>
+    );
+  }
 
   return <ArtifactButton artifact={artifact} />;
 }

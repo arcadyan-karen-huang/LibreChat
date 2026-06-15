@@ -209,6 +209,16 @@ const ChatForm = memo(function ChatForm({
     }
   }, [isEditingBadges, badges, backupBadges.length]);
 
+  useEffect(() => {
+    const handleArtifactMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'user-message' && event.data?.content) {
+        submitMessage({ text: event.data.content });
+      }
+    };
+    window.addEventListener('message', handleArtifactMessage);
+    return () => window.removeEventListener('message', handleArtifactMessage);
+  }, []);
+
   const handleSaveBadges = useCallback(() => {
     setIsEditingBadges(false);
     setBackupBadges([]);

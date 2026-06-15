@@ -14,6 +14,7 @@ export interface Artifact {
   content?: string;
   title?: string;
   type?: string;
+  inline?: string;
 }
 
 export type ArtifactFiles =
