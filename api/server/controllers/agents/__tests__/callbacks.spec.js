@@ -62,6 +62,7 @@ jest.mock('~/server/services/Tools/credentials', () => ({
 
 jest.mock('~/server/services/Files/process', () => ({
   saveBase64Image: jest.fn(),
+  saveBase64File: jest.fn(),
 }));
 
 describe('createToolEndCallback', () => {
@@ -252,6 +253,107 @@ describe('createToolEndCallback', () => {
 
       expect(artifactPromises).toHaveLength(0);
       expect(res.write).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('mcp_files artifact handling', () => {
+    let saveBase64File;
+
+    beforeEach(() => {
+      saveBase64File = require('~/server/services/Files/process').saveBase64File;
+    });
+
+    it('should persist mcp_files blobs as attachments and return them when headers not sent', async () => {
+      saveBase64File.mockResolvedValue({
+        file_id: 'file-1',
+        filename: 'report.pdf',
+        filepath: '/files/report.pdf',
+        type: 'application/pdf',
+        bytes: 3,
+      });
+
+      const toolEndCallback = createToolEndCallback({ req, res, artifactPromises });
+
+      const output = {
+        name: 'my_mcp_tool',
+        tool_call_id: 'tool123',
+        artifact: {
+          mcp_files: [
+            {
+              name: 'report.pdf',
+              type: 'application/pdf',
+              data: 'data:application/pdf;base64,QUJDRA==',
+            },
+          ],
+        },
+      };
+
+      const metadata = { run_id: 'run456', thread_id: 'thread789' };
+
+      await toolEndCallback({ output }, metadata);
+      const results = await Promise.all(artifactPromises);
+
+      expect(saveBase64File).toHaveBeenCalledWith(
+        'data:application/pdf;base64,QUJDRA==',
+        expect.objectContaining({ req, filename: 'report.pdf', basePath: 'uploads' }),
+      );
+      expect(res.write).not.toHaveBeenCalled();
+      expect(results[0]).toEqual(
+        expect.objectContaining({
+          file_id: 'file-1',
+          filename: 'report.pdf',
+          messageId: 'run456',
+          toolCallId: 'tool123',
+          conversationId: 'thread789',
+        }),
+      );
+    });
+
+    it('should write the attachment to the response when headers are already sent', async () => {
+      res.headersSent = true;
+      saveBase64File.mockResolvedValue({
+        file_id: 'file-2',
+        filename: 'data.zip',
+        filepath: '/files/data.zip',
+        type: 'application/zip',
+        bytes: 3,
+      });
+
+      const toolEndCallback = createToolEndCallback({ req, res, artifactPromises });
+
+      const output = {
+        name: 'my_mcp_tool',
+        tool_call_id: 'tool123',
+        artifact: {
+          mcp_files: [
+            {
+              name: 'data.zip',
+              type: 'application/zip',
+              data: 'data:application/zip;base64,QUJDRA==',
+            },
+          ],
+        },
+      };
+
+      await toolEndCallback({ output }, { run_id: 'run456', thread_id: 'thread789' });
+      await Promise.all(artifactPromises);
+
+      expect(res.write).toHaveBeenCalled();
+    });
+
+    it('should skip mcp_files entries without data', async () => {
+      const toolEndCallback = createToolEndCallback({ req, res, artifactPromises });
+
+      const output = {
+        name: 'my_mcp_tool',
+        tool_call_id: 'tool123',
+        artifact: { mcp_files: [{ name: 'empty.bin' }] },
+      };
+
+      await toolEndCallback({ output }, { run_id: 'run456', thread_id: 'thread789' });
+
+      expect(saveBase64File).not.toHaveBeenCalled();
+      expect(artifactPromises).toHaveLength(0);
     });
   });
 

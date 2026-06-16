@@ -17,7 +17,7 @@ const {
 } = require('@librechat/api');
 const { processFileCitations } = require('~/server/services/Files/Citations');
 const { processCodeOutput, runPreviewFinalize } = require('~/server/services/Files/Code/process');
-const { saveBase64Image } = require('~/server/services/Files/process');
+const { saveBase64Image, saveBase64File } = require('~/server/services/Files/process');
 
 function isHostFileAuthoringArtifact(artifact) {
   return artifact?.[HOST_FILE_AUTHORING_ARTIFACT_KEY] === true;
@@ -585,6 +585,40 @@ function createToolEndCallback({ req, res, artifactPromises, streamId = null }) 
       );
     }
 
+    if (output.artifact.mcp_files) {
+      const files = output.artifact.mcp_files;
+      for (let i = 0; i < files.length; i++) {
+        const mcpFile = files[i];
+        if (!mcpFile?.data) {
+          continue;
+        }
+        artifactPromises.push(
+          (async () => {
+            const filename = mcpFile.name || `${output.name}_file_${nanoid()}`;
+            const file = await saveBase64File(mcpFile.data, {
+              req,
+              filename,
+              context: FileContext.message_attachment,
+              basePath: 'uploads',
+            });
+            const fileMetadata = Object.assign(file, {
+              messageId: metadata.run_id,
+              toolCallId: output.tool_call_id,
+              conversationId: metadata.thread_id,
+            });
+            if (!streamId && !res.headersSent) {
+              return fileMetadata;
+            }
+            writeAttachment(res, streamId, fileMetadata);
+            return fileMetadata;
+          })().catch((error) => {
+            logger.error('Error processing MCP file artifact:', error);
+            return null;
+          }),
+        );
+      }
+    }
+
     if (output.artifact.content) {
       /** @type {FormattedContent[]} */
       const content = output.artifact.content;
@@ -842,6 +876,45 @@ function createResponsesToolEndCallback({ req, res, tracker, artifactPromises })
           return null;
         }),
       );
+    }
+
+    if (output.artifact.mcp_files) {
+      const files = output.artifact.mcp_files;
+      for (let i = 0; i < files.length; i++) {
+        const mcpFile = files[i];
+        if (!mcpFile?.data) {
+          continue;
+        }
+        artifactPromises.push(
+          (async () => {
+            const filename = mcpFile.name || `${output.name}_file_${nanoid()}`;
+            const file = await saveBase64File(mcpFile.data, {
+              req,
+              filename,
+              context: FileContext.message_attachment,
+              basePath: 'uploads',
+            });
+            const fileMetadata = Object.assign(file, {
+              toolCallId: output.tool_call_id,
+            });
+            if (res.headersSent && !res.writableEnded) {
+              const attachment = {
+                file_id: fileMetadata.file_id,
+                filename: fileMetadata.filename,
+                type: fileMetadata.type,
+                url: fileMetadata.filepath,
+                bytes: fileMetadata.bytes,
+                tool_call_id: output.tool_call_id,
+              };
+              writeResponsesAttachment(res, tracker, attachment, metadata);
+            }
+            return fileMetadata;
+          })().catch((error) => {
+            logger.error('Error processing MCP file artifact:', error);
+            return null;
+          }),
+        );
+      }
     }
 
     if (output.artifact.content) {

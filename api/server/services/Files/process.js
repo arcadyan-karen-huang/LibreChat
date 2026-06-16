@@ -1178,10 +1178,11 @@ async function retrieveAndProcessFile({
  */
 function base64ToBuffer(base64String) {
   try {
-    const typeMatch = base64String.match(/^data:([A-Za-z-+/]+);base64,/);
+    const dataUriPattern = /^data:([^;,]+);base64,/;
+    const typeMatch = base64String.match(dataUriPattern);
     const type = typeMatch ? typeMatch[1] : '';
 
-    const base64Data = base64String.replace(/^data:([A-Za-z-+/]+);base64,/, '');
+    const base64Data = base64String.replace(dataUriPattern, '');
 
     if (!base64Data) {
       throw new Error('Invalid base64 string');
@@ -1238,6 +1239,65 @@ async function saveBase64Image(
       width: image.width,
       ...(await getRetentionExpiry(req)),
       height: image.height,
+      tenantId: req.user.tenantId,
+    },
+    true,
+  );
+}
+
+/**
+ * Persists a base64-encoded (data URI) binary payload as a downloadable file.
+ * Unlike {@link saveBase64Image}, no image resizing/conversion is applied, and the
+ * non-image file strategy is used so arbitrary types (PDF, xlsx, zip, …) are stored
+ * verbatim. Used to materialize non-image blobs returned by MCP tools.
+ *
+ * @param {string} url - A `data:<mime>;base64,<payload>` URI.
+ * @param {Object} params
+ * @param {ServerRequest} params.req - The Express request object.
+ * @param {string} [params.file_id] - Optional pre-assigned file id.
+ * @param {string} params.filename - Desired filename (extension inferred from MIME when absent).
+ * @param {FileContext} params.context - The file context.
+ * @param {string} [params.basePath='images'] - Storage base path (e.g. 'uploads' for API-served downloads).
+ * @returns {Promise<MongoFile>} The persisted file record.
+ */
+async function saveBase64File(
+  url,
+  { req, file_id: _file_id, filename: _filename, context, basePath = 'images' },
+) {
+  const appConfig = req.config;
+  const file_id = _file_id ?? v4();
+  const { buffer, type } = base64ToBuffer(url);
+  let filename = _filename;
+  if (!path.extname(_filename) && type) {
+    const extension = mime.getExtension(type);
+    if (extension) {
+      filename += `.${extension}`;
+    }
+  }
+  const storageFilename = `${file_id}-${filename}`;
+
+  const source = getFileStrategy(appConfig);
+  const { saveBuffer } = getStrategyFunctions(source);
+  const filepath = await saveBuffer({
+    userId: req.user.id,
+    fileName: storageFilename,
+    buffer,
+    basePath,
+    tenantId: req.user.tenantId,
+  });
+  const storageMetadata = getStorageMetadata({ filepath, source });
+  return await db.createFile(
+    {
+      type: type || 'application/octet-stream',
+      source,
+      context,
+      file_id,
+      filepath,
+      ...storageMetadata,
+      filename,
+      user: req.user.id,
+      bytes: Buffer.byteLength(buffer),
+      ...(await getRetentionExpiry(req)),
       tenantId: req.user.tenantId,
     },
     true,
@@ -1325,6 +1385,7 @@ function filterFile({ req, image, isAvatar }) {
 module.exports = {
   filterFile,
   processFileURL,
+  saveBase64File,
   saveBase64Image,
   processImageFile,
   uploadImageBuffer,

@@ -134,6 +134,12 @@ export type Artifacts =
       };
       [Tools.web_search]?: SearchResultData;
       files?: Array<{ id: string; name: string }>;
+      /**
+       * Non-image binary resources returned by MCP tools as embedded base64
+       * blobs. Persisted as downloadable file attachments by the tool-end
+       * callback. Each `data` is a `data:<mime>;base64,<payload>` URI.
+       */
+      mcp_files?: Array<{ name: string; type: string; data: string }>;
       session_id?: string;
       file_ids?: string[];
     }

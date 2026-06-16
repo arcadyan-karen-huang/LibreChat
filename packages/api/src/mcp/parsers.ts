@@ -4,19 +4,27 @@ import type { UIResource } from 'librechat-data-provider';
 import type * as t from './types';
 
 export const DEFAULT_MCP_IMAGE_DATA_MAX_BYTES = 10 * 1024 * 1024;
+export const DEFAULT_MCP_FILE_DATA_MAX_BYTES = 25 * 1024 * 1024;
 
 function generateResourceId(text: string): string {
   return crypto.createHash('sha256').update(text).digest('hex').substring(0, 10);
 }
 
-function getMCPImageDataMaxBytes(): number {
-  const raw = process.env.MCP_IMAGE_DATA_MAX_BYTES;
+function getEnvMaxBytes(raw: string | undefined, fallback: number): number {
   if (!raw) {
-    return DEFAULT_MCP_IMAGE_DATA_MAX_BYTES;
+    return fallback;
   }
 
   const parsed = Number(raw);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : DEFAULT_MCP_IMAGE_DATA_MAX_BYTES;
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function getMCPImageDataMaxBytes(): number {
+  return getEnvMaxBytes(process.env.MCP_IMAGE_DATA_MAX_BYTES, DEFAULT_MCP_IMAGE_DATA_MAX_BYTES);
+}
+
+function getMCPFileDataMaxBytes(): number {
+  return getEnvMaxBytes(process.env.MCP_FILE_DATA_MAX_BYTES, DEFAULT_MCP_FILE_DATA_MAX_BYTES);
 }
 
 function getBase64Padding(data: string): number {
@@ -29,7 +37,7 @@ function getBase64Padding(data: string): number {
   return 0;
 }
 
-function estimateBase64ImageBytes(data: string): number {
+function estimateBase64Bytes(data: string): number {
   const padding = getBase64Padding(data);
   return Math.max(0, Math.floor((data.length * 3) / 4) - padding);
 }
@@ -44,7 +52,7 @@ function assertImageDataWithinLimit(item: t.ImageContent): void {
   }
 
   const maxBytes = getMCPImageDataMaxBytes();
-  const estimatedBytes = estimateBase64ImageBytes(item.data);
+  const estimatedBytes = estimateBase64Bytes(item.data);
   if (estimatedBytes <= maxBytes) {
     return;
   }
@@ -52,6 +60,34 @@ function assertImageDataWithinLimit(item: t.ImageContent): void {
   throw new Error(
     `MCP image result exceeds maximum size of ${maxBytes} bytes: ${estimatedBytes} bytes`,
   );
+}
+
+function assertFileDataWithinLimit(blob: string): void {
+  const maxBytes = getMCPFileDataMaxBytes();
+  const estimatedBytes = estimateBase64Bytes(blob);
+  if (estimatedBytes <= maxBytes) {
+    return;
+  }
+
+  throw new Error(
+    `MCP file result exceeds maximum size of ${maxBytes} bytes: ${estimatedBytes} bytes`,
+  );
+}
+
+function getResourceFilename(uri: string): string {
+  if (!uri) {
+    return '';
+  }
+
+  const withoutQuery = uri.split(/[?#]/)[0];
+  const segments = withoutQuery.split('/').filter(Boolean);
+  const last = segments[segments.length - 1] ?? '';
+
+  try {
+    return decodeURIComponent(last);
+  } catch {
+    return last;
+  }
 }
 
 const RECOGNIZED_PROVIDERS = new Set([
@@ -153,6 +189,7 @@ export function formatToolContent(
 
   const imageUrls: t.FormattedContent[] = [];
   const uiResources: UIResource[] = [];
+  const fileResources: Array<{ name: string; type: string; data: string }> = [];
   let currentTextBlock = '';
 
   type ContentHandler = undefined | ((item: t.ToolContentPart) => void);
@@ -198,6 +235,15 @@ export function formatToolContent(
         resourceText.push(`UI Resource Marker: \\ui{${resourceId}}`);
       } else if ('text' in item.resource && item.resource.text != null && item.resource.text) {
         resourceText.push(`Resource Text: ${item.resource.text}`);
+      } else if ('blob' in item.resource && item.resource.blob) {
+        const blob = item.resource.blob;
+        assertFileDataWithinLimit(blob);
+        const mimeType = item.resource.mimeType || 'application/octet-stream';
+        fileResources.push({
+          name: getResourceFilename(item.resource.uri),
+          type: mimeType,
+          data: `data:${mimeType};base64,${blob}`,
+        });
       }
 
       if (item.resource.uri.length) {
@@ -247,6 +293,13 @@ UI Resource Markers Available:
     artifacts = {
       ...artifacts,
       [Tools.ui_resources]: { data: uiResources },
+    };
+  }
+
+  if (fileResources.length > 0) {
+    artifacts = {
+      ...artifacts,
+      mcp_files: fileResources,
     };
   }
 

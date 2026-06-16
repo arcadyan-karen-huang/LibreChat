@@ -360,6 +360,104 @@ describe('formatToolContent', () => {
       expect(uiResource?.resourceId).toEqual(expect.any(String));
     });
 
+    it('should extract blob resources into mcp_files artifacts', () => {
+      const result: t.MCPToolCallResponse = {
+        content: [
+          { type: 'text', text: 'Here is your report' },
+          {
+            type: 'resource',
+            resource: {
+              uri: 'file:///reports/q2%20summary.pdf',
+              mimeType: 'application/pdf',
+              blob: 'QUJDRA==',
+            },
+          },
+        ],
+      };
+
+      const [content, artifacts] = formatToolContent(result, 'openai');
+      expect(content).toContain('Here is your report');
+      expect(content).toContain('Resource URI: file:///reports/q2%20summary.pdf');
+      expect(content).toContain('Resource MIME Type: application/pdf');
+      expect(artifacts?.mcp_files).toEqual([
+        {
+          name: 'q2 summary.pdf',
+          type: 'application/pdf',
+          data: 'data:application/pdf;base64,QUJDRA==',
+        },
+      ]);
+    });
+
+    it('should default the mime type to application/octet-stream for blobs without one', () => {
+      const result: t.MCPToolCallResponse = {
+        content: [
+          {
+            type: 'resource',
+            resource: {
+              uri: 'file:///archive.zip',
+              blob: 'QUJDRA==',
+            },
+          },
+        ],
+      };
+
+      const [, artifacts] = formatToolContent(result, 'anthropic');
+      expect(artifacts?.mcp_files).toEqual([
+        {
+          name: 'archive.zip',
+          type: 'application/octet-stream',
+          data: 'data:application/octet-stream;base64,QUJDRA==',
+        },
+      ]);
+    });
+
+    it('should reject oversized blob resources before creating artifacts', () => {
+      const originalMax = process.env.MCP_FILE_DATA_MAX_BYTES;
+      process.env.MCP_FILE_DATA_MAX_BYTES = '3';
+      try {
+        const result: t.MCPToolCallResponse = {
+          content: [
+            {
+              type: 'resource',
+              resource: {
+                uri: 'file:///big.bin',
+                mimeType: 'application/octet-stream',
+                blob: 'QUJDRA==',
+              },
+            },
+          ],
+        };
+
+        expect(() => formatToolContent(result, 'openai')).toThrow(
+          'MCP file result exceeds maximum size of 3 bytes',
+        );
+      } finally {
+        if (originalMax === undefined) {
+          delete process.env.MCP_FILE_DATA_MAX_BYTES;
+        } else {
+          process.env.MCP_FILE_DATA_MAX_BYTES = originalMax;
+        }
+      }
+    });
+
+    it('should not treat text resources as downloadable files', () => {
+      const result: t.MCPToolCallResponse = {
+        content: [
+          {
+            type: 'resource',
+            resource: {
+              uri: 'file://notes.txt',
+              mimeType: 'text/plain',
+              text: 'plain notes',
+            },
+          },
+        ],
+      };
+
+      const [, artifacts] = formatToolContent(result, 'openai');
+      expect(artifacts).toBeUndefined();
+    });
+
     it('should handle both images and UI resources in artifacts', () => {
       const result: t.MCPToolCallResponse = {
         content: [

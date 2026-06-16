@@ -73,6 +73,39 @@ function summarizeToolArguments(toolArguments?: Record<string, unknown>): Record
   return summary;
 }
 
+function summarizeBase64(value: unknown): Record<string, unknown> {
+  return {
+    base64_length: typeof value === 'string' ? value.length : null,
+    base64_preview: typeof value === 'string' ? value.slice(0, 32) : '[invalid]',
+  };
+}
+
+function summarizeToolResult(result: t.MCPToolCallResponse): unknown {
+  if (result == null || !Array.isArray(result.content)) {
+    return result;
+  }
+
+  const content = result.content.map((part) => {
+    if (part == null || typeof part !== 'object') {
+      return part;
+    }
+
+    if (part.type === 'image' || part.type === 'audio') {
+      const { data, ...rest } = part;
+      return { ...rest, ...summarizeBase64(data) };
+    }
+
+    if (part.type === 'resource' && part.resource != null && 'blob' in part.resource) {
+      const { blob, ...resourceRest } = part.resource;
+      return { ...part, resource: { ...resourceRest, ...summarizeBase64(blob) } };
+    }
+
+    return part;
+  });
+
+  return { ...result, content };
+}
+
 /**
  * Centralized manager for MCP server connections and tool execution.
  * Extends UserConnectionManager to handle both app-level and user-specific connections.
@@ -468,7 +501,7 @@ Please follow these instructions when using tools from the respective MCP server
         }
         resolvedHeaders['Authorization'] = `Bearer ${oboTokens.access_token}`;
       }
-      logger.warn(
+      logger.debug(
         `[MCP][${serverName}][${toolName}] Tool call parameters: ${JSON.stringify(
           summarizeToolArguments(toolArguments),
         )}`,
@@ -491,7 +524,11 @@ Please follow these instructions when using tools from the respective MCP server
           ...options,
         },
       );
-      logger.warn(`[MCP][${serverName}][${toolName}] Tool call result: ${JSON.stringify(result)}`);
+      logger.debug(
+        `[MCP][${serverName}][${toolName}] Tool call result: ${JSON.stringify(
+          summarizeToolResult(result as t.MCPToolCallResponse),
+        )}`,
+      );
       if (userId) {
         this.updateUserLastActivity(userId);
       }
