@@ -9,11 +9,17 @@ services:
     depends_on:
       - mongodb
       - rag_api
-    image: registry.librechat.ai/danny-avila/librechat-dev:latest
+    # image: registry.librechat.ai/danny-avila/librechat-dev:latest
+    image: librechat-arcadyan:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.multi
+      target: api-build
     restart: always
-    user: "${UID}:${GID}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    env_file:
+      - .env
     environment:
       - HOST=0.0.0.0
       - MONGO_URI=mongodb://mongodb:27017/LibreChat
@@ -27,11 +33,16 @@ services:
       - ./images:/app/client/public/images
       - ./uploads:/app/uploads
       - ./logs:/app/logs
+      - type: bind
+        source: ./librechat.yaml
+        target: /app/librechat.yaml
   mongodb:
     container_name: chat-mongodb
     image: mongo:8.0.20
     restart: always
     user: "${UID}:${GID}"
+    ports:  # Uncomment this to access mongodb from outside docker, not safe in deployment
+      - 27017:27017
     volumes:
       - ./data-node:/data/db
     command: mongod --noauth
@@ -46,6 +57,8 @@ services:
       - MEILI_MASTER_KEY=${MEILI_MASTER_KEY}
     volumes:
       - ./meili_data_v1.35.1:/meili_data
+    ports: # Uncomment this to access meilisearch from outside docker
+      - 7700:7700 # if exposing these ports, make sure your master key is not the default value
   vectordb:
     container_name: vectordb
     image: pgvector/pgvector:0.8.0-pg15-trixie
@@ -67,6 +80,13 @@ services:
       - vectordb
     env_file:
       - .env
+
+  codesandbox:
+    container_name: codesandbox
+    image: ghcr.io/librechat-ai/codesandbox-client/bundler:latest
+    restart: always
+    ports:
+      - "8001:80"
 
 volumes:
   pgdata2:
