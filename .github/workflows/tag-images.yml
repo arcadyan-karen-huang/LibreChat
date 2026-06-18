@@ -17,10 +17,10 @@ jobs:
         include:
           - target: api-build
             file: Dockerfile.multi
-            image_name: librechat-api
+            image_name: librechat-arcadyan-api
           - target: node
             file: Dockerfile
-            image_name: librechat
+            image_name: librechat-arcadyan
 
     steps:
       # Check out the repository
@@ -62,12 +62,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Login to Docker Hub
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # Login to Docker Hub (disabled: no DOCKERHUB secrets on fork)
+      # - name: Login to Docker Hub
+      #   uses: docker/login-action@v3
+      #   with:
+      #     username: ${{ secrets.DOCKERHUB_USERNAME }}
+      #     password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # Prepare the environment
       - name: Prepare environment
@@ -83,19 +83,17 @@ jobs:
       - name: Resolve image tags
         id: image-tags
         env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           IMAGE_NAME: ${{ matrix.image_name }}
           IMAGE_TAG: ${{ steps.release-tag.outputs.image_tag }}
           IS_STABLE: ${{ steps.release-tag.outputs.is_stable }}
         run: |
           set -euo pipefail
+          # Docker Hub tags disabled (no DOCKERHUB secrets on fork)
           {
             echo 'tags<<EOF'
             printf 'ghcr.io/%s/%s:%s\n' "$GITHUB_REPOSITORY_OWNER" "$IMAGE_NAME" "$IMAGE_TAG"
-            printf '%s/%s:%s\n' "$DOCKERHUB_USERNAME" "$IMAGE_NAME" "$IMAGE_TAG"
             if [ "$IS_STABLE" = "true" ]; then
               printf 'ghcr.io/%s/%s:latest\n' "$GITHUB_REPOSITORY_OWNER" "$IMAGE_NAME"
-              printf '%s/%s:latest\n' "$DOCKERHUB_USERNAME" "$IMAGE_NAME"
             fi
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
@@ -114,3 +112,26 @@ jobs:
             BUILD_COMMIT=${{ env.BUILD_COMMIT }}
             BUILD_BRANCH=${{ env.BUILD_BRANCH }}
             BUILD_DATE=${{ env.BUILD_DATE }}
+
+      # Export a single-arch (amd64) image as a loadable docker-archive tarball
+      - name: Export image tarball
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          platforms: linux/amd64
+          target: ${{ matrix.target }}
+          tags: ${{ matrix.image_name }}:${{ steps.release-tag.outputs.image_tag }}
+          outputs: type=docker,dest=${{ github.workspace }}/${{ matrix.image_name }}.tar
+          build-args: |
+            BUILD_COMMIT=${{ env.BUILD_COMMIT }}
+            BUILD_BRANCH=${{ env.BUILD_BRANCH }}
+            BUILD_DATE=${{ env.BUILD_DATE }}
+
+      - name: Upload image tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.image_name }}-image
+          path: ${{ github.workspace }}/${{ matrix.image_name }}.tar
+          if-no-files-found: error
+          retention-days: 7

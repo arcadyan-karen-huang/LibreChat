@@ -12,6 +12,7 @@ permissions:
 jobs:
   sync-translations:
     name: Sync Translation Keys with Locize
+    if: github.repository == 'danny-avila/LibreChat'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
